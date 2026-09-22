@@ -1,0 +1,13 @@
+---
+title: "Index"
+format: 
+  html: #for website
+    embed-resources: true
+editor: visual
+---
+
+**WCS MERMAID Time Series Examples**
+
+- [Exploring MERMAID time series](explore_time_series_map.html) - an interactive map of sites with repeated surveys, filtered by sampling protocol and minimum number of years
+
+- [Repository](https://github.com/data-mermaid/analysis-explore-time-series)

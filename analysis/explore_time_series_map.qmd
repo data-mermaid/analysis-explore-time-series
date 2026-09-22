@@ -1,0 +1,566 @@
+---
+title: "Exploring MERMAID time series"
+subtitle: "Mapping sites with repeated surveys, by sampling protocol"
+author:
+  - name: Iain R. Caldwell
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    code-summary: "Show code"
+    theme: cosmo
+    self-contained: true
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+editor: visual
+title-block-banner: "#f0f3f5"
+title-block-banner-color: "black"
+include-after-body: "footer.html"
+editor_options:
+  chunk_output_type: console
+---
+
+## Overview
+
+Many analyses of coral reef change need **time series** - the same site surveyed repeatedly over the years - and often need more than one kind of survey at each visit, for example fish and benthic surveys done together. This document finds every MERMAID site with publicly available data (**public** or **public summary** data policies) and maps them by how many years they have been surveyed.
+
+The interactive map at the end lets you:
+
+- **Choose one or more sampling protocols** - fish belt, benthic (PIT, LIT and PQT combined), bleaching, and habitat complexity. When several are chosen, a site is only shown if *all* of them were surveyed within 30 days of each other.
+- **Set a minimum number of years** of data, so only sites with longer time series are shown.
+
+Sites are colored by the number of years with data, and clicking a site shows its name, project, data policy for each selected protocol, and the years it was surveyed. A searchable table below the map lists the same sites.
+
+**How repeats are counted.** A repeat is a distinct **calendar year** with data. For a single protocol, that is simply every year the protocol was surveyed at the site. For several protocols, surveys are *paired* when every selected protocol was surveyed at the site within ±30 days of any one of those surveys (so the outermost surveys can be up to 60 days apart). Each paired visit is assigned to the year of its earliest survey. Protocols that are not selected are ignored.
+
+## Setup
+
+```{r setup}
+#| warning: false
+library(here)
+
+# Pin the project root explicitly. _quarto.yml sits in analysis/, which makes
+# that folder look like a project root, so during a render here::here() would
+# otherwise resolve to analysis/ instead of the repository root - and the
+# cached data in data/ would not be found.
+here::i_am("analysis/explore_time_series_map.qmd")
+library(tidyverse)
+library(mermaidr)
+
+# Coloured status messages. knitr::asis_output() renders HTML without needing
+# results: asis on the chunk. Must be the last expression of its chunk.
+status_msg <- function(..., color = "#006400") {
+  knitr::asis_output(
+    paste0('<span style="color: ', color, ';">', paste(...), '</span>\n\n')
+  )
+}
+
+# Keep local absolute paths out of the rendered HTML
+rel_path <- function(path) {
+  sub(paste0(here::here(), "/"), "", path, fixed = TRUE)
+}
+
+# Set this to TRUE to re-download the MERMAID data instead of using the cache
+force_download <- FALSE
+
+# Surveys of different protocols count as paired when they are within this
+# many days of each other
+pair_window_days <- 30
+
+# The protocols offered on the map. Names are the keys used throughout the
+# code (and in the map), values are the labels shown to readers.
+protocols <- c(fish      = "Fish belt",
+               benthic   = "Benthic (PIT, LIT, PQT)",
+               bleaching = "Bleaching",
+               habitat   = "Habitat complexity")
+
+# Hard coral cover columns for the three benthic protocols. These are averaged
+# (ignoring NAs) to give a single benthic value per sample event.
+hard_coral_cols <- c("benthicpit_percent_cover_benthic_category_avg_Hard coral",
+                     "benthiclit_percent_cover_benthic_category_avg_Hard coral",
+                     "benthicpqt_percent_cover_benthic_category_avg_Hard coral")
+
+# Colour bands for the number of years with data - single source of truth for
+# the map colours and legend. A site takes the last band whose min_years it
+# reaches.
+year_bands <- tibble(
+  label     = c("1 year", "2 years", "3-4 years", "5-9 years", "10+ years"),
+  min_years = c(1, 2, 3, 5, 10),
+  # viridis, reversed: light = few years, dark = many. Colour-blind safe, and
+  # avoids red, which reads as "bad" and is used as a warning colour elsewhere.
+  colour    = c("#fde725", "#5ec962", "#21918c", "#3b528b", "#440154")
+)
+```
+
+## Data
+
+### MERMAID summary sample events
+
+All sample events are downloaded once with `mermaid_get_summary_sampleevents()` and cached to `data/`. The summary endpoint covers every project, but values are only filled in for protocols whose data policy is **public** or **public summary** - private projects appear with their survey counts but no values - so this one call gives all publicly available data without needing an API token. Set `force_download <- TRUE` in the setup chunk (or delete the cached file) to refresh it.
+
+```{r get-mermaid-data}
+mermaid_summ_ses_path <- here::here("data", "mermaid_summ_ses.rds")
+
+if (file.exists(mermaid_summ_ses_path) && !force_download) {
+  mermaid_summ_ses <- readRDS(mermaid_summ_ses_path)
+  data_msg <- paste0("Loaded ", nrow(mermaid_summ_ses),
+                     " cached sample events from ", rel_path(mermaid_summ_ses_path),
+                     " (downloaded ",
+                     format(file.mtime(mermaid_summ_ses_path), "%d %B %Y"), ")")
+} else {
+  mermaid_summ_ses <- mermaid_get_summary_sampleevents()
+  dir.create(dirname(mermaid_summ_ses_path), showWarnings = FALSE, recursive = TRUE)
+  saveRDS(mermaid_summ_ses, mermaid_summ_ses_path)
+  data_msg <- paste0("Downloaded ", nrow(mermaid_summ_ses),
+                     " sample events from MERMAID and saved them to ",
+                     rel_path(mermaid_summ_ses_path))
+}
+
+# Fail early, with a useful message, if the export format has changed
+required_cols <- c("site_id", "site", "project", "country",
+                   "latitude", "longitude", "sample_date",
+                   "data_policy_beltfish", "data_policy_benthicpit",
+                   "data_policy_benthiclit", "data_policy_benthicpqt",
+                   "data_policy_bleachingqc", "data_policy_habitatcomplexity",
+                   "beltfish_biomass_kgha_avg", hard_coral_cols,
+                   "colonies_bleached_percent_normal_avg",
+                   "quadrat_benthic_percent_percent_hard_avg_avg",
+                   "habitatcomplexity_score_avg_avg")
+missing_cols <- setdiff(required_cols, names(mermaid_summ_ses))
+if (length(missing_cols) > 0) {
+  stop("These expected columns are missing from the MERMAID export: ",
+       paste(missing_cols, collapse = ", "))
+}
+
+status_msg(data_msg, color = "#4682B4")
+```
+
+### Surveys by protocol
+
+Each sample event is turned into one row per protocol that has data. Presence is judged from the values rather than the survey counts, because the counts are also filled in for private projects:
+
+- **Fish belt** - fish biomass is not missing.
+- **Benthic** - hard coral cover is averaged across the PIT, LIT and PQT protocols, ignoring missing values, and the sample event counts as benthic if any of the three has a value.
+- **Bleaching** - either the colony bleaching or the bleaching quadrat percent cover values are not missing.
+- **Habitat complexity** - the habitat complexity score is not missing.
+
+Only rows with a public or public summary data policy are kept. The table below counts **sample events**, which is what MERMAID Explore calls surveys, so its totals can be compared with Explore. A site can have more than one sample event of a protocol on the same day - usually because it was surveyed under different management regimes, occasionally as separate records under the same one. For the pairing and year counts these are merged into a single **site-day**; this never changes the number of sites or years.
+
+```{r surveys-by-protocol}
+ses <- mermaid_summ_ses %>%
+  mutate(
+    sample_date = as.Date(sample_date),
+    # Average hard coral cover across benthic protocols, ignoring NAs.
+    # rowMeans() returns NaN when every value is NA, so convert that back to NA.
+    hard_coral_cover = rowMeans(pick(all_of(hard_coral_cols)), na.rm = TRUE),
+    hard_coral_cover = if_else(is.nan(hard_coral_cover), NA_real_, hard_coral_cover),
+    # Data policy of whichever benthic protocol supplied the value
+    policy_benthic = case_when(
+      !is.na(`benthicpit_percent_cover_benthic_category_avg_Hard coral`) ~ data_policy_benthicpit,
+      !is.na(`benthiclit_percent_cover_benthic_category_avg_Hard coral`) ~ data_policy_benthiclit,
+      !is.na(`benthicpqt_percent_cover_benthic_category_avg_Hard coral`) ~ data_policy_benthicpqt
+    )
+  )
+
+# One row per sample event and protocol - comparable with MERMAID Explore
+survey_events <- bind_rows(
+  ses %>%
+    filter(!is.na(beltfish_biomass_kgha_avg)) %>%
+    transmute(site_id, sample_date, protocol = "fish",
+              policy = data_policy_beltfish),
+  ses %>%
+    filter(!is.na(hard_coral_cover)) %>%
+    transmute(site_id, sample_date, protocol = "benthic",
+              policy = policy_benthic),
+  ses %>%
+    filter(!is.na(colonies_bleached_percent_normal_avg) |
+             !is.na(quadrat_benthic_percent_percent_hard_avg_avg)) %>%
+    transmute(site_id, sample_date, protocol = "bleaching",
+              policy = data_policy_bleachingqc),
+  ses %>%
+    filter(!is.na(habitatcomplexity_score_avg_avg)) %>%
+    transmute(site_id, sample_date, protocol = "habitat",
+              policy = data_policy_habitatcomplexity)
+) %>%
+  filter(policy %in% c("public", "public summary"))
+
+# One row per site-day and protocol - used for the pairing and year counts
+surveys <- survey_events %>%
+  distinct(site_id, sample_date, protocol, .keep_all = TRUE)
+
+survey_events %>%
+  group_by(protocol) %>%
+  summarise(`Sample events` = n(),
+            `Site-days` = n_distinct(site_id, sample_date),
+            Sites   = n_distinct(site_id),
+            `First survey` = min(sample_date),
+            `Last survey`  = max(sample_date),
+            .groups = "drop") %>%
+  mutate(protocol = factor(protocol, levels = names(protocols))) %>%
+  arrange(protocol) %>%
+  mutate(protocol = protocols[as.character(protocol)]) %>%
+  rename(Protocol = protocol) %>%
+  knitr::kable(format.args = list(big.mark = ","))
+```
+
+## Pairing surveys and counting years
+
+### The pairing rule
+
+`pair_events()` finds paired visits for a given set of protocols. Every survey of a selected protocol is treated in turn as an **anchor**. For each selected protocol, the survey at the same site closest in time to the anchor is found, provided it is within ±`pair_window_days` days. If every selected protocol has such a survey, the anchor and its matches form one paired visit, dated by its earliest survey.
+
+With a single protocol this reduces to every survey being its own visit. `summarise_years()` then counts the distinct calendar years of those visits for each site.
+
+Because every survey can act as the anchor, the same visit is usually found more than once (once from the fish survey, once from the benthic survey, and so on). That does not inflate the count, since only distinct years are counted.
+
+```{r pairing-functions}
+pair_events <- function(surveys, combo, window = pair_window_days) {
+  s <- surveys %>%
+    filter(protocol %in% combo) %>%
+    select(site_id, protocol, sample_date)
+
+  anchors <- s %>%
+    transmute(site_id,
+              anchor_protocol = protocol,
+              anchor_date     = sample_date,
+              lower = sample_date - window,
+              upper = sample_date + window) %>%
+    mutate(anchor_id = row_number())
+
+  anchors %>%
+    # Every survey of a selected protocol at the same site within the window
+    inner_join(s,
+               by = join_by(site_id, lower <= sample_date, upper >= sample_date),
+               relationship = "many-to-many") %>%
+    mutate(gap = abs(as.numeric(sample_date - anchor_date))) %>%
+    # Keep the closest survey of each protocol to the anchor
+    arrange(anchor_id, protocol, gap) %>%
+    distinct(anchor_id, protocol, .keep_all = TRUE) %>%
+    # Keep anchors where every selected protocol was found (one row each)
+    add_count(anchor_id, name = "n_protocols_found") %>%
+    filter(n_protocols_found == length(combo)) %>%
+    mutate(pair_date = min(sample_date), .by = anchor_id) %>%
+    select(site_id, anchor_id, anchor_protocol, anchor_date,
+           protocol, sample_date, pair_date)
+}
+
+summarise_years <- function(events) {
+  events %>%
+    distinct(site_id, anchor_id, pair_date) %>%
+    mutate(year = year(pair_date)) %>%
+    group_by(site_id) %>%
+    summarise(n_years = n_distinct(year),
+              years   = paste(sort(unique(year)), collapse = ", "),
+              .groups = "drop")
+}
+```
+
+### Every combination of protocols
+
+There are 15 possible combinations of the four protocols. Each is worked out here rather than in the browser, so the logic can be checked in R. The map then only has to look up the combination that is ticked.
+
+```{r all-combinations}
+# All combinations of 1 to 4 protocols, keeping the order of `protocols`
+combos <- map(seq_along(protocols),
+              \(m) combn(names(protocols), m, simplify = FALSE)) %>%
+  unlist(recursive = FALSE)
+
+combo_info <- tibble(
+  combo       = map_chr(combos, \(x) paste(x, collapse = "+")),
+  Protocols   = map_chr(combos, \(x) paste(protocols[x], collapse = " + ")),
+  n_protocols = lengths(combos)
+)
+
+site_combo_years <- map(combos, \(x) {
+  pair_events(surveys, x) %>%
+    summarise_years() %>%
+    mutate(combo = paste(x, collapse = "+"))
+}) %>%
+  list_rbind()
+
+# Number of sites reaching each minimum number of years, per combination
+combo_info %>%
+  left_join(site_combo_years %>%
+              group_by(combo) %>%
+              summarise(`1+ years`  = n(),
+                        `2+ years`  = sum(n_years >= 2),
+                        `3+ years`  = sum(n_years >= 3),
+                        `5+ years`  = sum(n_years >= 5),
+                        `10+ years` = sum(n_years >= 10),
+                        .groups = "drop"),
+            by = "combo") %>%
+  mutate(across(ends_with("years"), \(x) replace_na(x, 0))) %>%
+  select(-combo, -n_protocols) %>%
+  knitr::kable(format.args = list(big.mark = ","))
+```
+
+### Checking the pairing at one site
+
+To check the rule by eye, this takes the site with the most years of paired fish and benthic surveys and lists its surveys, then the paired visits found from them.
+
+```{r check-example-site}
+example_combo  <- c("fish", "benthic")
+example_events <- pair_events(surveys, example_combo)
+
+example_site_id <- example_events %>%
+  summarise_years() %>%
+  slice_max(n_years, n = 1, with_ties = FALSE) %>%
+  pull(site_id)
+
+example_site <- ses %>%
+  filter(site_id == example_site_id) %>%
+  distinct(site, project)
+
+# All fish and benthic surveys at the example site
+surveys %>%
+  filter(site_id == example_site_id, protocol %in% example_combo) %>%
+  mutate(protocol = protocols[protocol]) %>%
+  arrange(sample_date, protocol) %>%
+  select(Date = sample_date, Protocol = protocol, `Data policy` = policy) %>%
+  knitr::kable(caption = paste0("Fish and benthic surveys at ", example_site$site,
+                                " (", example_site$project, ")"))
+```
+
+Each row below is one anchor survey with the closest survey of each protocol within ±`r pair_window_days` days. Fish or benthic surveys with no partner inside the window do not appear.
+
+```{r check-example-pairs}
+example_events %>%
+  filter(site_id == example_site_id) %>%
+  select(anchor_id, anchor_protocol, anchor_date, protocol, sample_date, pair_date) %>%
+  pivot_wider(names_from = protocol, values_from = sample_date) %>%
+  mutate(anchor_protocol = protocols[anchor_protocol],
+         year = year(pair_date)) %>%
+  arrange(anchor_date) %>%
+  select(Anchor = anchor_protocol, `Anchor date` = anchor_date,
+         `Fish survey` = fish, `Benthic survey` = benthic,
+         `Visit date` = pair_date, Year = year) %>%
+  knitr::kable()
+```
+
+### Preparing the data for the map
+
+The map runs in the browser with [Observable JS](https://quarto.org/docs/interactive/ojs/), so the R results are handed over with `ojs_define()`. Two tables are passed: one row per site (name, project, location, and data policy for each protocol), and one row per site and protocol combination (number of years and the list of years). Sites are identified in both tables by their MERMAID site ID (`site_id`), which stays the same when the data are refreshed.
+
+Sites near the antimeridian (Fiji, for example) have longitudes on both sides of ±180°. For drawing only, longitudes below -150° are shifted by +360° so these sites sit together on the map. The table keeps the original longitude.
+
+`ojs_define()` only exists during a render, so when the chunks are run interactively in RStudio this chunk just prints a note and the map section is skipped.
+
+```{r prepare-map-data}
+# Data policy per site and protocol ("public" or "public summary"; both are
+# listed if a site somehow has both)
+site_policies <- surveys %>%
+  mutate(protocol = factor(protocol, levels = names(protocols))) %>%
+  group_by(site_id, protocol) %>%
+  summarise(policy = paste(sort(unique(policy)), collapse = " / "),
+            .groups = "drop") %>%
+  pivot_wider(names_from = protocol, values_from = policy,
+              names_prefix = "policy_", names_expand = TRUE)
+
+site_info <- ses %>%
+  filter(site_id %in% surveys$site_id) %>%
+  distinct(site_id, .keep_all = TRUE) %>%
+  select(site_id, site, project, country, latitude, longitude) %>%
+  mutate(longitude_map = if_else(longitude < -150, longitude + 360, longitude)) %>%
+  left_join(site_policies, by = "site_id")
+
+site_combo_map <- site_combo_years %>%
+  select(site_id, combo, n_years, years)
+
+if (exists("ojs_define")) {
+  ojs_define(protocols_js  = tibble(key = names(protocols), label = unname(protocols)),
+             sites_js      = site_info,
+             site_combo_js = site_combo_map,
+             year_bands_js = year_bands,
+             pair_window_js = pair_window_days)
+  status_msg(nrow(site_info), "sites passed to the map")
+} else {
+  status_msg("Running interactively: ojs_define() is only available during a render,",
+             "so the map below will only appear in the rendered document.",
+             color = "#4682B4")
+}
+```
+
+## Interactive map
+
+Tick one or more protocols and set the minimum number of years. With several protocols ticked, a site is only shown if all of them were surveyed within ±30 days of each other in at least that many years. Click a site for details.
+
+Counts on the map are **sites**, not surveys. MERMAID Explore reports the number of surveys (sample events), so its totals are higher: a site surveyed five times is one site here but five surveys in Explore.
+
+```{ojs}
+//| output: false
+// Data handed over from R. ojs_define() passes data frames column-wise,
+// so transpose() turns them into arrays of row objects.
+protocols  = transpose(protocols_js)
+sites      = transpose(sites_js)
+siteCombo  = transpose(site_combo_js)
+yearBands  = transpose(year_bands_js)
+siteLookup = new Map(sites.map(d => [d.site_id, d]))
+maxYears   = Math.max(...siteCombo.map(d => d.n_years))
+protocolLabel = key => protocols.find(d => d.key === key).label
+
+// Leaflet is loaded from a CDN when the page is opened
+leaflet = require("leaflet@1.9.4/dist/leaflet.js")
+leafletCss = {
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css";
+  document.head.appendChild(link);
+  return link;
+}
+
+// Escape text before it goes into popup HTML (site names can contain & or <)
+esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
+  ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]))
+
+// Colour band for a number of years: the last band whose minimum is reached
+bandFor = n => yearBands.filter(b => n >= b.min_years).at(-1)
+
+// Remembers the map position so the view is kept when the filters change
+mapState = ({center: null, zoom: null})
+```
+
+```{ojs}
+viewof selectedProtocols = Inputs.checkbox(protocols.map(d => d.key), {
+  label: "Protocols",
+  format: protocolLabel,
+  value: ["fish", "benthic"]
+})
+
+viewof minYears = Inputs.range([1, maxYears], {
+  label: "Minimum number of years",
+  step: 1,
+  value: 2
+})
+```
+
+```{ojs}
+//| output: false
+// Combination key in the same order R used, e.g. "fish+benthic"
+comboKey = protocols
+  .map(d => d.key)
+  .filter(k => selectedProtocols.includes(k))
+  .join("+")
+
+filteredSites = siteCombo
+  .filter(d => d.combo === comboKey && d.n_years >= minYears)
+  .map(d => ({...siteLookup.get(d.site_id), n_years: d.n_years, years: d.years}))
+  // Draw sites with more years last, so they sit on top
+  .sort((a, b) => a.n_years - b.n_years)
+```
+
+```{ojs}
+selectedProtocols.length === 0
+  ? md`*Tick at least one protocol to show sites.*`
+  : md`**${filteredSites.length.toLocaleString()}** sites have ${
+      selectedProtocols.length === 1
+        ? `${protocolLabel(selectedProtocols[0])} data`
+        : `${selectedProtocols.map(protocolLabel).join(", ")} surveyed within ±${pair_window_js} days of each other`
+    } in at least **${minYears}** year${minYears === 1 ? "" : "s"}.`
+```
+
+```{ojs}
+{
+  leafletCss;
+  const container = html`<div style="height: 600px; width: 100%;"></div>`;
+  yield container;
+
+  const map = leaflet.map(container, {preferCanvas: true, worldCopyJump: true});
+  // OpenStreetMap tiles need no API key
+  leaflet.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 18,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+  }).addTo(map);
+
+  // Keep the previous view when the filters change; otherwise fit the sites
+  if (mapState.center) {
+    map.setView(mapState.center, mapState.zoom);
+  } else if (filteredSites.length > 0) {
+    map.fitBounds(filteredSites.map(d => [d.latitude, d.longitude_map]), {padding: [20, 20]});
+  } else {
+    map.setView([-5, 120], 2);
+  }
+  map.on("moveend", () => {
+    mapState.center = map.getCenter();
+    mapState.zoom = map.getZoom();
+  });
+
+  for (const d of filteredSites) {
+    const policies = selectedProtocols
+      .map(k => `${esc(protocolLabel(k))}: ${esc(d["policy_" + k] ?? "-")}`)
+      .join("<br>");
+    const popup =
+      `<strong>${esc(d.site)}</strong><br>` +
+      `${esc(d.project)}<br>${esc(d.country)}<br><br>` +
+      `<em>Data policy</em><br>${policies}<br><br>` +
+      `<em>Years with data (${d.n_years})</em><br>${esc(d.years)}`;
+    leaflet.circleMarker([d.latitude, d.longitude_map], {
+      radius: 5,
+      weight: 0.6,
+      color: "#333333",
+      fillColor: bandFor(d.n_years).colour,
+      fillOpacity: 0.9
+    }).bindPopup(popup).addTo(map);
+  }
+
+  // Legend
+  const legend = leaflet.control({position: "bottomright"});
+  legend.onAdd = () => {
+    const div = leaflet.DomUtil.create("div");
+    div.style.cssText = "background: white; padding: 6px 10px; border-radius: 4px; " +
+      "box-shadow: 0 1px 4px rgba(0,0,0,0.3); font-size: 12px; line-height: 18px;";
+    div.innerHTML = "<strong>Years with data</strong><br>" + yearBands
+      .map(b => `<span style="display: inline-block; width: 12px; height: 12px; ` +
+                `border-radius: 50%; border: 1px solid #333; margin-right: 6px; ` +
+                `vertical-align: middle; background: ${b.colour};"></span>${b.label}`)
+      .join("<br>");
+    return div;
+  };
+  legend.addTo(map);
+
+  invalidation.then(() => map.remove());
+}
+```
+
+## Sites shown on the map
+
+The same sites as the map, with the number of years and the years themselves. Use the search box to filter by site, project or country; click a column header to sort.
+
+```{ojs}
+viewof tableSearch = Inputs.search(filteredSites, {
+  placeholder: "Search sites, projects or countries"
+})
+```
+
+```{ojs}
+Inputs.table(tableSearch, {
+  columns: ["site", "project", "country", "n_years", "years",
+            ...selectedProtocols.map(k => "policy_" + k),
+            "latitude", "longitude"],
+  header: Object.fromEntries([
+    ["site", "Site"], ["project", "Project"], ["country", "Country"],
+    ["n_years", "Number of years"], ["years", "Years"],
+    ["latitude", "Latitude"], ["longitude", "Longitude"],
+    ...protocols.map(d => ["policy_" + d.key, d.label + " policy"])
+  ]),
+  format: {
+    latitude:  x => x.toFixed(4),
+    longitude: x => x.toFixed(4)
+  },
+  sort: "n_years",
+  reverse: true,
+  rows: 15
+})
+```
+
+## Notes and caveats
+
+- **Sites are matched by MERMAID site record.** Site records belong to projects, so if two projects surveyed the same reef under different site records, their surveys are not combined into one time series here.
+- **Sites versus surveys.** The map and table count sites. MERMAID Explore counts surveys (sample events): one survey of one protocol at a site on a date, under one management regime. Where a site has more than one sample event of a protocol on the same day - usually under different management regimes, occasionally as separate records under the same regime - they are merged into one site-day here. Neither affects the number of sites or years.
+- **Years, not visits.** Two surveys of the same protocol in the same year count once. Surveys in late December and early January count as two different years, even when they are paired across protocols.
+- **Public data only.** Protocols with a private data policy are left out, even though the summary data show that those surveys exist. Data policies apply to a project and protocol, so a site can be public for fish but public summary for benthic surveys; the popup and table show the policy for each selected protocol.
+- **Up-to-date data.** The first render downloads the latest data from MERMAID; later renders reuse the cached copy in `data/` until `force_download` is set to `TRUE` or the file is deleted.
