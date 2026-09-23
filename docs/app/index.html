@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MERMAID Time Series Explorer</title>
+  <meta name="description" content="Find coral reef sites in MERMAID with repeated surveys, by sampling protocol.">
+  <link rel="icon" type="image/png" href="mermaid-logo.png">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/MarkerCluster.css">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-title">Time Series Explorer</span>
+      <span class="brand-sub">Coral reef sites with repeated surveys in MERMAID</span>
+    </div>
+    <nav class="topnav">
+      <a href="../explore_time_series_map.html">Method</a>
+      <a href="https://github.com/data-mermaid/analysis-explore-time-series">GitHub</a>
+    </nav>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" aria-label="Filters">
+      <section class="summary" aria-live="polite">
+        <div class="big-number" id="site-count">–</div>
+        <div class="summary-label" id="site-count-label">sites</div>
+        <div class="summary-detail" id="summary-detail">Loading data…</div>
+      </section>
+
+      <section class="panel">
+        <h2>Protocols</h2>
+        <div id="protocol-list" class="protocol-list"></div>
+        <p class="hint">With more than one ticked, a site needs all of them surveyed within the pairing window.</p>
+      </section>
+
+      <section class="panel" id="window-panel">
+        <div class="panel-head">
+          <h2><label for="window">Pairing window</label></h2>
+          <output id="window-value" for="window">±30 days</output>
+        </div>
+        <input type="range" id="window" min="0" max="120" step="1" value="30">
+        <p class="hint" id="window-hint">Only used when two or more protocols are ticked.</p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2><label for="min-years">Minimum number of years</label></h2>
+          <output id="min-years-value" for="min-years">2</output>
+        </div>
+        <input type="range" id="min-years" min="1" max="20" step="1" value="2">
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Countries</h2>
+          <button type="button" class="link-button" id="country-clear" hidden>Clear</button>
+        </div>
+        <input type="search" class="filter-search" id="country-search" placeholder="Search countries" aria-label="Search countries">
+        <div class="filter-options" id="country-options" role="group" aria-label="Countries"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Projects</h2>
+          <button type="button" class="link-button" id="project-clear" hidden>Clear</button>
+        </div>
+        <input type="search" class="filter-search" id="project-search" placeholder="Search projects" aria-label="Search projects">
+        <div class="filter-options" id="project-options" role="group" aria-label="Projects"></div>
+      </section>
+
+      <section class="panel">
+        <label class="toggle"><input type="checkbox" id="group-sites" checked> Group nearby sites</label>
+        <button type="button" class="primary" id="download">Download sites (CSV)</button>
+      </section>
+
+      <details class="panel about">
+        <summary>How sites are counted</summary>
+        <ul>
+          <li><strong>Data:</strong> all MERMAID surveys with a <em>public</em> or <em>public summary</em> data policy. Private data are not included. <span id="data-date"></span></li>
+          <li><strong>Benthic</strong> combines the PIT, LIT and PQT protocols.</li>
+          <li><strong>Years:</strong> a site's count is the number of distinct calendar years with data.</li>
+          <li><strong>Pairing:</strong> with several protocols ticked, surveys are paired when every ticked protocol was surveyed at the site within the pairing window of any one of those surveys (so the outermost surveys can be up to twice the window apart). Each paired visit counts in the year of its earliest survey. Protocols that are not ticked are ignored.</li>
+          <li><strong>Sites, not surveys:</strong> counts here are sites. MERMAID Explore counts surveys, so its totals are higher.</li>
+          <li>Sites are matched by MERMAID site record, so the same reef recorded under two projects appears twice.</li>
+        </ul>
+        <p>The full method, with the same rules worked through in R, is in the <a href="../explore_time_series_map.html">Quarto document</a>.</p>
+      </details>
+
+      <footer class="sidebar-footer">
+        <span>Powered by</span>
+        <a href="https://datamermaid.org/"><img src="mermaid-logo.png" alt="MERMAID"></a>
+        <p>An Analysis Hub example built on public MERMAID data. It is not an official MERMAID product.</p>
+      </footer>
+    </aside>
+
+    <main class="map-wrap">
+      <div id="map" aria-label="Map of sites"></div>
+      <aside id="site-panel" class="site-panel" hidden aria-live="polite"></aside>
+      <div id="loading" class="loading">Loading data…</div>
+    </main>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

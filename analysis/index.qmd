@@ -10,4 +10,6 @@ editor: visual
 
 - [Exploring MERMAID time series](explore_time_series_map.html) - an interactive map of sites with repeated surveys, filtered by sampling protocol and minimum number of years
 
+- [Time Series Explorer](app/) - a standalone web app with the same map, plus an adjustable pairing window, country and project filters, and CSV download
+
 - [Repository](https://github.com/data-mermaid/analysis-explore-time-series)
