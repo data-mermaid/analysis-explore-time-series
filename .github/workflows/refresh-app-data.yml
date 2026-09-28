@@ -20,12 +20,15 @@ permissions:
 
 jobs:
   refresh:
-    runs-on: ubuntu-latest
+    # Pinned rather than ubuntu-latest, so a new Ubuntu release (and any delay
+    # in pre-built R packages for it) cannot break the refresh unexpectedly.
+    # Update this deliberately when you choose to.
+    runs-on: ubuntu-24.04
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up R
         uses: r-lib/actions/setup-r@v2
