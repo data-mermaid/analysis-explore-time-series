@@ -85,6 +85,22 @@ the same cached `data/mermaid_summ_ses.rds` as the Quarto document (set
 The presence rules in the script are copied from the Quarto document. If you change them
 in one, change them in the other.
 
+#### Automatic monthly refresh
+
+`.github/workflows/refresh-app-data.yml` runs the export script on GitHub at 06:00 UTC on
+the 1st of each month. It downloads fresh data and commits `app_data.json` only if the data
+have changed, and GitHub Pages then publishes it. To refresh straight away, open the
+repository's **Actions** tab, choose **Refresh app data**, and click **Run workflow**.
+
+- The workflow needs **Settings > Actions > General > Workflow permissions** set to
+  *Read and write permissions*.
+- After an automatic refresh, run `git pull` before your next commit, as GitHub will have
+  added a commit.
+- GitHub pauses scheduled workflows in repositories with no activity for 60 days, and
+  sends an email when it does. Re-enable it from the Actions tab.
+- The Quarto document is not refreshed by the workflow; it shows the data from its last
+  render.
+
 ### Testing the app locally
 
 Opening `docs/app/index.html` by double-clicking will not work: browsers do not let a page
@@ -115,6 +131,8 @@ analysis/
 data/                            Cached data (created on first render, not committed)
 R/
   export_app_data.R              Writes the app's data file
+.github/workflows/
+  refresh-app-data.yml           Monthly refresh of the app's data on GitHub
 docs/                            Rendered HTML, published via GitHub Pages
   app/                           The Time Series Explorer app (index.html, app.js, app.css)
     data/app_data.json           The app's data, written by R/export_app_data.R

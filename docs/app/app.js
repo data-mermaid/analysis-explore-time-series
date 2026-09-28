@@ -443,7 +443,13 @@ function buildControls() {
   $("download").addEventListener("click", downloadCsv);
 
   const d = DATA.meta.downloaded;
-  $("data-date").textContent = d ? `Data downloaded from MERMAID on ${d}.` : "";
+  // Download date written by R/export_app_data.R, e.g. "2026-09-22" -> "22 September 2026"
+  const when = d
+    ? new Date(d + "T00:00:00Z").toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })
+    : null;
+  $("data-date").textContent = when ? `Data downloaded from MERMAID on ${when}.` : "";
+  $("summary-date").innerHTML = when
+    ? `Data downloaded from MERMAID on <span class="nowrap">${esc(when)}</span>` : "";
 }
 
 function updateSummary() {
@@ -494,7 +500,8 @@ function downloadCsv() {
   const header = ["site_id", "site", "project", "project_id", "country",
     "latitude", "longitude", "n_years", "years", "first_year", "last_year",
     "protocols", "pairing_window_days",
-    ...keys.map(k => `policy_${k}`)];
+    ...keys.map(k => `policy_${k}`),
+    "data_downloaded"];
 
   const rows = [...RESULTS]
     .sort((a, b) => b.n - a.n || a.site.name.localeCompare(b.site.name))
@@ -502,7 +509,8 @@ function downloadCsv() {
       r.site.id, r.site.name, r.site.project.name, r.site.project.id, r.site.country.name,
       r.site.lat, r.site.lon, r.n, r.years.join("; "), r.years[0], r.years[r.years.length - 1],
       labels.join(" + "), protIdx.length > 1 ? state.window : "",
-      ...protIdx.map(p => POLICY_LABELS[r.site.policy[p]])
+      ...protIdx.map(p => POLICY_LABELS[r.site.policy[p]]),
+      DATA.meta.downloaded ?? ""   // date the MERMAID data were downloaded (YYYY-MM-DD)
     ]);
 
   const csv = [header, ...rows].map(row => row.map(csvCell).join(",")).join("\r\n");
