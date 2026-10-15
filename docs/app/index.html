@@ -35,6 +35,8 @@
         <h2>Protocols</h2>
         <div id="protocol-list" class="protocol-list"></div>
         <p class="hint">With more than one ticked, a site needs all of them surveyed within the pairing window.</p>
+        <label class="toggle private-toggle"><input type="checkbox" id="include-private"> Include private data</label>
+        <p class="hint">Private surveys show where and when sampling happened. Their results are not shared.</p>
       </section>
 
       <section class="panel" id="window-panel">
@@ -80,7 +82,8 @@
       <details class="panel about">
         <summary>How sites are counted</summary>
         <ul>
-          <li><strong>Data:</strong> all MERMAID surveys with a <em>public</em> or <em>public summary</em> data policy. Private data are not included. <span id="data-date"></span></li>
+          <li><strong>Data:</strong> all MERMAID surveys with a <em>public</em> or <em>public summary</em> data policy. Surveys with a <em>private</em> data policy are added when <em>Include private data</em> is ticked; MERMAID shares only where and when these happened, not their results. <span id="data-date"></span></li>
+          <li>A protocol counts as surveyed when MERMAID records a sample unit count for it.</li>
           <li><strong>Benthic</strong> combines the PIT, LIT and PQT protocols.</li>
           <li><strong>Years:</strong> a site's count is the number of distinct calendar years with data.</li>
           <li><strong>Pairing:</strong> with several protocols ticked, surveys are paired when every ticked protocol was surveyed at the site within the pairing window of any one of those surveys (so the outermost surveys can be up to twice the window apart). Each paired visit counts in the year of its earliest survey. Protocols that are not ticked are ignored.</li>

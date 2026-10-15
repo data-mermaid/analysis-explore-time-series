@@ -4,9 +4,10 @@
 # cached MERMAID export in data/ - the same file the Quarto document uses - or
 # downloads it if it is missing, and writes docs/app/data/app_data.json.
 #
-# The presence rules and the public-only filter are copied from
-# analysis/explore_time_series_map.qmd, so both give the same surveys. If you
-# change them in one place, change them in the other.
+# The presence rules are copied from analysis/explore_time_series_map.qmd, so
+# both give the same surveys. If you change them in one place, change them in
+# the other. Surveys with a private data policy are exported too; the app
+# leaves them out unless "Include private data" is switched on.
 #
 # The app does the pairing itself (in docs/app/app.js), so this file only
 # exports one row per site and one row per site-day and protocol.
@@ -27,12 +28,20 @@ protocols <- c(fish      = "Fish belt",
                bleaching = "Bleaching",
                habitat   = "Habitat complexity")
 
-hard_coral_cols <- c("benthicpit_percent_cover_benthic_category_avg_Hard coral",
-                     "benthiclit_percent_cover_benthic_category_avg_Hard coral",
-                     "benthicpqt_percent_cover_benthic_category_avg_Hard coral")
+# Survey (sample unit) count columns, which show whether a protocol was
+# surveyed. Unlike the values, these are filled in for every data policy -
+# including private - so they decide whether a protocol is present.
+su_cols <- list(
+  fish      = "beltfish_sample_unit_count",
+  benthic   = c("benthicpit_sample_unit_count", "benthiclit_sample_unit_count",
+                "benthicpqt_sample_unit_count"),
+  bleaching = c("colonies_bleached_sample_unit_count",
+                "quadrat_benthic_percent_sample_unit_count"),
+  habitat   = "habitatcomplexity_sample_unit_count"
+)
 
 # Data policies are sent to the app as numbers to keep the file small
-policy_codes <- c("public summary" = 1L, "public" = 2L)
+policy_codes <- c("public summary" = 1L, "public" = 2L, "private" = 3L)
 
 out_path <- here::here("docs", "app", "data", "app_data.json")
 
@@ -55,10 +64,7 @@ required_cols <- c("site_id", "site", "project_id", "project", "country",
                    "data_policy_beltfish", "data_policy_benthicpit",
                    "data_policy_benthiclit", "data_policy_benthicpqt",
                    "data_policy_bleachingqc", "data_policy_habitatcomplexity",
-                   "beltfish_biomass_kgha_avg", hard_coral_cols,
-                   "colonies_bleached_percent_normal_avg",
-                   "quadrat_benthic_percent_percent_hard_avg_avg",
-                   "habitatcomplexity_score_avg_avg")
+                   unlist(su_cols))
 missing_cols <- setdiff(required_cols, names(mermaid_summ_ses))
 if (length(missing_cols) > 0) {
   stop("These expected columns are missing from the MERMAID export: ",
@@ -69,32 +75,29 @@ if (length(missing_cols) > 0) {
 ses <- mermaid_summ_ses %>%
   mutate(
     sample_date = as.Date(sample_date),
-    hard_coral_cover = rowMeans(pick(all_of(hard_coral_cols)), na.rm = TRUE),
-    hard_coral_cover = if_else(is.nan(hard_coral_cover), NA_real_, hard_coral_cover),
     policy_benthic = case_when(
-      !is.na(`benthicpit_percent_cover_benthic_category_avg_Hard coral`) ~ data_policy_benthicpit,
-      !is.na(`benthiclit_percent_cover_benthic_category_avg_Hard coral`) ~ data_policy_benthiclit,
-      !is.na(`benthicpqt_percent_cover_benthic_category_avg_Hard coral`) ~ data_policy_benthicpqt
+      !is.na(benthicpit_sample_unit_count) ~ data_policy_benthicpit,
+      !is.na(benthiclit_sample_unit_count) ~ data_policy_benthiclit,
+      !is.na(benthicpqt_sample_unit_count) ~ data_policy_benthicpqt
     )
   )
 
 # One row per sample event and protocol - comparable with MERMAID Explore
 survey_events <- bind_rows(
   ses %>%
-    filter(!is.na(beltfish_biomass_kgha_avg)) %>%
+    filter(if_any(all_of(su_cols$fish), \(x) !is.na(x) & x > 0)) %>%
     transmute(site_id, sample_date, protocol = "fish",
               policy = data_policy_beltfish),
   ses %>%
-    filter(!is.na(hard_coral_cover)) %>%
+    filter(if_any(all_of(su_cols$benthic), \(x) !is.na(x) & x > 0)) %>%
     transmute(site_id, sample_date, protocol = "benthic",
               policy = policy_benthic),
   ses %>%
-    filter(!is.na(colonies_bleached_percent_normal_avg) |
-             !is.na(quadrat_benthic_percent_percent_hard_avg_avg)) %>%
+    filter(if_any(all_of(su_cols$bleaching), \(x) !is.na(x) & x > 0)) %>%
     transmute(site_id, sample_date, protocol = "bleaching",
               policy = data_policy_bleachingqc),
   ses %>%
-    filter(!is.na(habitatcomplexity_score_avg_avg)) %>%
+    filter(if_any(all_of(su_cols$habitat), \(x) !is.na(x) & x > 0)) %>%
     transmute(site_id, sample_date, protocol = "habitat",
               policy = data_policy_habitatcomplexity)
 ) %>%
@@ -105,12 +108,13 @@ surveys <- survey_events %>%
   distinct(site_id, sample_date, protocol, .keep_all = TRUE)
 
 #### Sites, projects and countries ####
-# Data policy per site and protocol: 0 = no public data, 1 = public summary,
-# 2 = public, 3 = both (adding the codes of the policies present)
+# Data policy per site and protocol: 0 = not surveyed, 1 = public summary,
+# 2 = public, 3 = private. Policies are set per project and protocol, so a site
+# has one policy per protocol; max() would treat any mix as private.
 site_policies <- surveys %>%
   mutate(protocol = factor(protocol, levels = names(protocols))) %>%
   group_by(site_id, protocol) %>%
-  summarise(policy = sum(unique(policy_codes[policy])), .groups = "drop") %>%
+  summarise(policy = max(policy_codes[policy]), .groups = "drop") %>%
   pivot_wider(names_from = protocol, values_from = policy,
               names_expand = TRUE, values_fill = 0L)
 
@@ -138,10 +142,14 @@ app_data <- list(
     downloaded     = format(downloaded_on),
     exported       = format(Sys.Date()),
     protocols      = tibble(key = names(protocols), label = unname(protocols)),
-    sample_events  = as.list(table(factor(survey_events$protocol,
-                                          levels = names(protocols)))),
-    policy_codes   = list(`0` = "none", `1` = "public summary",
-                          `2` = "public", `3` = "public and public summary")
+    sample_events_public  = as.list(table(factor(
+      survey_events$protocol[survey_events$policy != "private"],
+      levels = names(protocols)))),
+    sample_events_private = as.list(table(factor(
+      survey_events$protocol[survey_events$policy == "private"],
+      levels = names(protocols)))),
+    policy_codes   = list(`0` = "not surveyed", `1` = "public summary",
+                          `2` = "public", `3` = "private")
   ),
   countries = countries,
   projects  = list(id = projects$project_id, name = projects$project),

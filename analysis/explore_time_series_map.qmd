@@ -27,12 +27,13 @@ editor_options:
 
 ## Overview
 
-Many analyses of coral reef change need **time series** - the same site surveyed repeatedly over the years - and often need more than one kind of survey at each visit, for example fish and benthic surveys done together. This document finds every MERMAID site with publicly available data (**public** or **public summary** data policies) and maps them by how many years they have been surveyed.
+Many analyses of coral reef change need **time series** - the same site surveyed repeatedly over the years - and often need more than one kind of survey at each visit, for example fish and benthic surveys done together. This document finds every MERMAID site with publicly available data (**public** or **public summary** data policies) and maps them by how many years they have been surveyed. Surveys from protocols with a **private** data policy can be added too: their values are not shared, but MERMAID still records where and when they happened, which is all a time series map needs.
 
 The interactive map at the end lets you:
 
 - **Choose one or more sampling protocols** - fish belt, benthic (PIT, LIT and PQT combined), bleaching, and habitat complexity. When several are chosen, a site is only shown if *all* of them were surveyed within 30 days of each other.
 - **Set a minimum number of years** of data, so only sites with longer time series are shown.
+- **Include private data** or not. It is off by default, so the map starts with public and public summary data only.
 
 Sites are colored by the number of years with data, and clicking a site shows its name, project, data policy for each selected protocol, and the years it was surveyed. A searchable table below the map lists the same sites.
 
@@ -79,11 +80,22 @@ protocols <- c(fish      = "Fish belt",
                bleaching = "Bleaching",
                habitat   = "Habitat complexity")
 
-# Hard coral cover columns for the three benthic protocols. These are averaged
-# (ignoring NAs) to give a single benthic value per sample event.
-hard_coral_cols <- c("benthicpit_percent_cover_benthic_category_avg_Hard coral",
-                     "benthiclit_percent_cover_benthic_category_avg_Hard coral",
-                     "benthicpqt_percent_cover_benthic_category_avg_Hard coral")
+# Survey (sample unit) count columns, which show whether a protocol was
+# surveyed in a sample event. Unlike the values, these are filled in for every
+# data policy - including private - so they decide whether a protocol is
+# present. Benthic combines PIT, LIT and PQT; bleaching has separate counts for
+# colonies and quadrats.
+su_cols <- list(
+  fish      = "beltfish_sample_unit_count",
+  benthic   = c("benthicpit_sample_unit_count", "benthiclit_sample_unit_count",
+                "benthicpqt_sample_unit_count"),
+  bleaching = c("colonies_bleached_sample_unit_count",
+                "quadrat_benthic_percent_sample_unit_count"),
+  habitat   = "habitatcomplexity_sample_unit_count"
+)
+
+# Data policies kept. "Public" in the tables below means public or public summary.
+policy_levels <- c("public", "public summary", "private")
 
 # Colour bands for the number of years with data - single source of truth for
 # the map colours and legend. A site takes the last band whose min_years it
@@ -101,7 +113,7 @@ year_bands <- tibble(
 
 ### MERMAID summary sample events
 
-All sample events are downloaded once with `mermaid_get_summary_sampleevents()` and cached to `data/`. The summary endpoint covers every project, but values are only filled in for protocols whose data policy is **public** or **public summary** - private projects appear with their survey counts but no values - so this one call gives all publicly available data without needing an API token. Set `force_download <- TRUE` in the setup chunk (or delete the cached file) to refresh it.
+All sample events are downloaded once with `mermaid_get_summary_sampleevents()` and cached to `data/`. The summary endpoint covers every project and needs no API token. Values (biomass, cover, scores) are only filled in for protocols whose data policy is **public** or **public summary**; for **private** protocols the summary still records the site, date and number of sample units, but no values. Set `force_download <- TRUE` in the setup chunk (or delete the cached file) to refresh it.
 
 ```{r get-mermaid-data}
 mermaid_summ_ses_path <- here::here("data", "mermaid_summ_ses.rds")
@@ -127,10 +139,7 @@ required_cols <- c("site_id", "site", "project", "country",
                    "data_policy_beltfish", "data_policy_benthicpit",
                    "data_policy_benthiclit", "data_policy_benthicpqt",
                    "data_policy_bleachingqc", "data_policy_habitatcomplexity",
-                   "beltfish_biomass_kgha_avg", hard_coral_cols,
-                   "colonies_bleached_percent_normal_avg",
-                   "quadrat_benthic_percent_percent_hard_avg_avg",
-                   "habitatcomplexity_score_avg_avg")
+                   unlist(su_cols))
 missing_cols <- setdiff(required_cols, names(mermaid_summ_ses))
 if (length(missing_cols) > 0) {
   stop("These expected columns are missing from the MERMAID export: ",
@@ -142,62 +151,63 @@ status_msg(data_msg, color = "#4682B4")
 
 ### Surveys by protocol
 
-Each sample event is turned into one row per protocol that has data. Presence is judged from the values rather than the survey counts, because the counts are also filled in for private projects:
+Each sample event is turned into one row per protocol that was surveyed. A protocol counts as surveyed when its **sample unit count** is filled in. For public and public summary data this gives exactly the same result as checking the values, and unlike the values it also works for private data:
 
-- **Fish belt** - fish biomass is not missing.
-- **Benthic** - hard coral cover is averaged across the PIT, LIT and PQT protocols, ignoring missing values, and the sample event counts as benthic if any of the three has a value.
-- **Bleaching** - either the colony bleaching or the bleaching quadrat percent cover values are not missing.
-- **Habitat complexity** - the habitat complexity score is not missing.
+- **Fish belt** - the fish belt sample unit count.
+- **Benthic** - any of the PIT, LIT or PQT sample unit counts.
+- **Bleaching** - either the colony or the quadrat sample unit count.
+- **Habitat complexity** - the habitat complexity sample unit count.
 
-Only rows with a public or public summary data policy are kept. The table below counts **sample events**, which is what MERMAID Explore calls surveys, so its totals can be compared with Explore. A site can have more than one sample event of a protocol on the same day - usually because it was surveyed under different management regimes, occasionally as separate records under the same one. For the pairing and year counts these are merged into a single **site-day**; this never changes the number of sites or years.
+Each row keeps the data policy of its protocol: public, public summary or private. In the table, *public* means public or public summary. The table counts **sample events**, which is what MERMAID Explore calls surveys, so its totals can be compared with Explore. A site can have more than one sample event of a protocol on the same day - usually because it was surveyed under different management regimes, occasionally as separate records under the same one. For the pairing and year counts these are merged into a single **site-day**; this never changes the number of sites or years.
 
 ```{r surveys-by-protocol}
 ses <- mermaid_summ_ses %>%
   mutate(
     sample_date = as.Date(sample_date),
-    # Average hard coral cover across benthic protocols, ignoring NAs.
-    # rowMeans() returns NaN when every value is NA, so convert that back to NA.
-    hard_coral_cover = rowMeans(pick(all_of(hard_coral_cols)), na.rm = TRUE),
-    hard_coral_cover = if_else(is.nan(hard_coral_cover), NA_real_, hard_coral_cover),
-    # Data policy of whichever benthic protocol supplied the value
+    # Data policy of whichever benthic protocol was surveyed (MERMAID sets the
+    # benthic policies together, so they normally agree)
     policy_benthic = case_when(
-      !is.na(`benthicpit_percent_cover_benthic_category_avg_Hard coral`) ~ data_policy_benthicpit,
-      !is.na(`benthiclit_percent_cover_benthic_category_avg_Hard coral`) ~ data_policy_benthiclit,
-      !is.na(`benthicpqt_percent_cover_benthic_category_avg_Hard coral`) ~ data_policy_benthicpqt
+      !is.na(benthicpit_sample_unit_count) ~ data_policy_benthicpit,
+      !is.na(benthiclit_sample_unit_count) ~ data_policy_benthiclit,
+      !is.na(benthicpqt_sample_unit_count) ~ data_policy_benthicpqt
     )
   )
 
 # One row per sample event and protocol - comparable with MERMAID Explore
 survey_events <- bind_rows(
   ses %>%
-    filter(!is.na(beltfish_biomass_kgha_avg)) %>%
+    filter(if_any(all_of(su_cols$fish), \(x) !is.na(x) & x > 0)) %>%
     transmute(site_id, sample_date, protocol = "fish",
               policy = data_policy_beltfish),
   ses %>%
-    filter(!is.na(hard_coral_cover)) %>%
+    filter(if_any(all_of(su_cols$benthic), \(x) !is.na(x) & x > 0)) %>%
     transmute(site_id, sample_date, protocol = "benthic",
               policy = policy_benthic),
   ses %>%
-    filter(!is.na(colonies_bleached_percent_normal_avg) |
-             !is.na(quadrat_benthic_percent_percent_hard_avg_avg)) %>%
+    filter(if_any(all_of(su_cols$bleaching), \(x) !is.na(x) & x > 0)) %>%
     transmute(site_id, sample_date, protocol = "bleaching",
               policy = data_policy_bleachingqc),
   ses %>%
-    filter(!is.na(habitatcomplexity_score_avg_avg)) %>%
+    filter(if_any(all_of(su_cols$habitat), \(x) !is.na(x) & x > 0)) %>%
     transmute(site_id, sample_date, protocol = "habitat",
               policy = data_policy_habitatcomplexity)
 ) %>%
-  filter(policy %in% c("public", "public summary"))
+  filter(policy %in% policy_levels)
 
-# One row per site-day and protocol - used for the pairing and year counts
+# One row per site-day and protocol - used for the pairing and year counts.
+# Data policies are set per project and protocol, so every survey of a protocol
+# at a site has the same policy.
 surveys <- survey_events %>%
   distinct(site_id, sample_date, protocol, .keep_all = TRUE)
+surveys_public <- surveys %>% filter(policy != "private")
 
 survey_events %>%
   group_by(protocol) %>%
-  summarise(`Sample events` = n(),
+  summarise(`Sample events (public)`  = sum(policy != "private"),
+            `Sample events (private)` = sum(policy == "private"),
             `Site-days` = n_distinct(site_id, sample_date),
-            Sites   = n_distinct(site_id),
+            `Sites (public)` = n_distinct(site_id[policy != "private"]),
+            `Sites (incl. private)` = n_distinct(site_id),
             `First survey` = min(sample_date),
             `Last survey`  = max(sample_date),
             .groups = "drop") %>%
@@ -262,7 +272,7 @@ summarise_years <- function(events) {
 
 ### Every combination of protocols
 
-There are 15 possible combinations of the four protocols. Each is worked out here rather than in the browser, so the logic can be checked in R. The map then only has to look up the combination that is ticked.
+There are 15 possible combinations of the four protocols. Each is worked out here rather than in the browser, so the logic can be checked in R, and each is worked out twice: with public data only, and including private data. The map then only has to look up the combination that is ticked.
 
 ```{r all-combinations}
 # All combinations of 1 to 4 protocols, keeping the order of `protocols`
@@ -276,17 +286,25 @@ combo_info <- tibble(
   n_protocols = lengths(combos)
 )
 
-site_combo_years <- map(combos, \(x) {
-  pair_events(surveys, x) %>%
-    summarise_years() %>%
-    mutate(combo = paste(x, collapse = "+"))
+# The two sets of surveys the map can show
+scopes <- list(public = surveys_public, all = surveys)
+
+site_combo_years <- imap(scopes, \(s, scope) {
+  map(combos, \(x) {
+    pair_events(s, x) %>%
+      summarise_years() %>%
+      mutate(combo = paste(x, collapse = "+"), scope = scope)
+  }) %>%
+    list_rbind()
 }) %>%
   list_rbind()
 
 # Number of sites reaching each minimum number of years, per combination
-combo_info %>%
-  left_join(site_combo_years %>%
-              group_by(combo) %>%
+combo_table <- function(which_scope) {
+  combo_info %>%
+    left_join(site_combo_years %>%
+                filter(scope == which_scope) %>%
+                group_by(combo) %>%
               summarise(`1+ years`  = n(),
                         `2+ years`  = sum(n_years >= 2),
                         `3+ years`  = sum(n_years >= 3),
@@ -294,18 +312,28 @@ combo_info %>%
                         `10+ years` = sum(n_years >= 10),
                         .groups = "drop"),
             by = "combo") %>%
-  mutate(across(ends_with("years"), \(x) replace_na(x, 0))) %>%
-  select(-combo, -n_protocols) %>%
-  knitr::kable(format.args = list(big.mark = ","))
+    mutate(across(ends_with("years"), \(x) replace_na(x, 0))) %>%
+    select(-combo, -n_protocols)
+}
+
+combo_table("public") %>%
+  knitr::kable(format.args = list(big.mark = ","),
+               caption = "Public and public summary data")
+```
+
+```{r all-combinations-private}
+combo_table("all") %>%
+  knitr::kable(format.args = list(big.mark = ","),
+               caption = "Including private data")
 ```
 
 ### Checking the pairing at one site
 
-To check the rule by eye, this takes the site with the most years of paired fish and benthic surveys and lists its surveys, then the paired visits found from them.
+To check the rule by eye, this takes the site with the most years of paired fish and benthic surveys (public data) and lists its surveys, then the paired visits found from them.
 
 ```{r check-example-site}
 example_combo  <- c("fish", "benthic")
-example_events <- pair_events(surveys, example_combo)
+example_events <- pair_events(surveys_public, example_combo)
 
 example_site_id <- example_events %>%
   summarise_years() %>%
@@ -317,7 +345,7 @@ example_site <- ses %>%
   distinct(site, project)
 
 # All fish and benthic surveys at the example site
-surveys %>%
+surveys_public %>%
   filter(site_id == example_site_id, protocol %in% example_combo) %>%
   mutate(protocol = protocols[protocol]) %>%
   arrange(sample_date, protocol) %>%
@@ -344,15 +372,15 @@ example_events %>%
 
 ### Preparing the data for the map
 
-The map runs in the browser with [Observable JS](https://quarto.org/docs/interactive/ojs/), so the R results are handed over with `ojs_define()`. Two tables are passed: one row per site (name, project, location, and data policy for each protocol), and one row per site and protocol combination (number of years and the list of years). Sites are identified in both tables by their MERMAID site ID (`site_id`), which stays the same when the data are refreshed.
+The map runs in the browser with [Observable JS](https://quarto.org/docs/interactive/ojs/), so the R results are handed over with `ojs_define()`. Two tables are passed: one row per site (name, project, location, and data policy for each protocol), and one row per site, protocol combination and scope - public only or including private - with the number of years and the list of years. Sites are identified in both tables by their MERMAID site ID (`site_id`), which stays the same when the data are refreshed.
 
 Sites near the antimeridian (Fiji, for example) have longitudes on both sides of ±180°. For drawing only, longitudes below -150° are shifted by +360° so these sites sit together on the map. The table keeps the original longitude.
 
 `ojs_define()` only exists during a render, so when the chunks are run interactively in RStudio this chunk just prints a note and the map section is skipped.
 
 ```{r prepare-map-data}
-# Data policy per site and protocol ("public" or "public summary"; both are
-# listed if a site somehow has both)
+# Data policy per site and protocol ("public", "public summary" or "private";
+# all are listed if a site somehow has more than one)
 site_policies <- surveys %>%
   mutate(protocol = factor(protocol, levels = names(protocols))) %>%
   group_by(site_id, protocol) %>%
@@ -369,7 +397,7 @@ site_info <- ses %>%
   left_join(site_policies, by = "site_id")
 
 site_combo_map <- site_combo_years %>%
-  select(site_id, combo, n_years, years)
+  select(site_id, combo, scope, n_years, years)
 
 if (exists("ojs_define")) {
   ojs_define(protocols_js  = tibble(key = names(protocols), label = unname(protocols)),
@@ -388,6 +416,8 @@ if (exists("ojs_define")) {
 ## Interactive map
 
 Tick one or more protocols and set the minimum number of years. With several protocols ticked, a site is only shown if all of them were surveyed within ±30 days of each other in at least that many years. Click a site for details.
+
+Turn on **Include private data** to add surveys from protocols with a private data policy. Only their locations and dates are shared, not their values, so they show where time series exist but not what the surveys found. Contact the project (through MERMAID) to ask about using them.
 
 Counts on the map are **sites**, not surveys. MERMAID Explore reports the number of surveys (sample events), so its totals are higher: a site surveyed five times is one site here but five surveys in Explore.
 
@@ -436,6 +466,11 @@ viewof minYears = Inputs.range([1, maxYears], {
   step: 1,
   value: 2
 })
+
+viewof includePrivate = Inputs.toggle({
+  label: "Include private data",
+  value: false
+})
 ```
 
 ```{ojs}
@@ -446,8 +481,11 @@ comboKey = protocols
   .filter(k => selectedProtocols.includes(k))
   .join("+")
 
+// "public" = public and public summary only; "all" adds private data
+scope = includePrivate ? "all" : "public"
+
 filteredSites = siteCombo
-  .filter(d => d.combo === comboKey && d.n_years >= minYears)
+  .filter(d => d.combo === comboKey && d.scope === scope && d.n_years >= minYears)
   .map(d => ({...siteLookup.get(d.site_id), n_years: d.n_years, years: d.years}))
   // Draw sites with more years last, so they sit on top
   .sort((a, b) => a.n_years - b.n_years)
@@ -460,7 +498,8 @@ selectedProtocols.length === 0
       selectedProtocols.length === 1
         ? `${protocolLabel(selectedProtocols[0])} data`
         : `${selectedProtocols.map(protocolLabel).join(", ")} surveyed within ±${pair_window_js} days of each other`
-    } in at least **${minYears}** year${minYears === 1 ? "" : "s"}.`
+    } in at least **${minYears}** year${minYears === 1 ? "" : "s"}${
+      includePrivate ? " (including private data)" : ""}.`
 ```
 
 ```{ojs}
@@ -562,5 +601,5 @@ Inputs.table(tableSearch, {
 - **Sites are matched by MERMAID site record.** Site records belong to projects, so if two projects surveyed the same reef under different site records, their surveys are not combined into one time series here.
 - **Sites versus surveys.** The map and table count sites. MERMAID Explore counts surveys (sample events): one survey of one protocol at a site on a date, under one management regime. Where a site has more than one sample event of a protocol on the same day - usually under different management regimes, occasionally as separate records under the same regime - they are merged into one site-day here. Neither affects the number of sites or years.
 - **Years, not visits.** Two surveys of the same protocol in the same year count once. Surveys in late December and early January count as two different years, even when they are paired across protocols.
-- **Public data only.** Protocols with a private data policy are left out, even though the summary data show that those surveys exist. Data policies apply to a project and protocol, so a site can be public for fish but public summary for benthic surveys; the popup and table show the policy for each selected protocol.
+- **Private data.** By default only public and public summary data are shown. With **Include private data** turned on, surveys from protocols with a private data policy are added; for these MERMAID shares only where and when the survey happened, not its values. Data policies apply to a project and protocol, so a site can be public for fish but private for benthic surveys; the popup and table show the policy for each selected protocol.
 - **Up-to-date data.** The first render downloads the latest data from MERMAID; later renders reuse the cached copy in `data/` until `force_download` is set to `TRUE` or the file is deleted.

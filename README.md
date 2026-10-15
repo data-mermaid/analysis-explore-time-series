@@ -23,12 +23,15 @@ repository rather than ignored.
 
 `analysis/explore_time_series_map.qmd`
 
-- **Data:** every sample event from `mermaid_get_summary_sampleevents()`. Values are only
-  filled in for protocols with a **public** or **public summary** data policy, so no API
-  token is needed. Private projects are left out.
-- **Protocols:** fish belt, benthic, bleaching and habitat complexity. The benthic
-  protocols (PIT, LIT and PQT) are combined by averaging hard coral cover across them,
-  ignoring missing values.
+- **Data:** every sample event from `mermaid_get_summary_sampleevents()`, which needs no
+  API token. Values are only filled in for protocols with a **public** or **public
+  summary** data policy. For **private** protocols the summary still records the site,
+  date and number of sample units, so private surveys can be included as locations and
+  dates only. They are off by default, and the map has an **Include private data** toggle.
+- **Protocols:** fish belt, benthic, bleaching and habitat complexity. A protocol counts as
+  surveyed when its sample unit count is filled in. Benthic combines the PIT, LIT and PQT
+  counts, and bleaching the colony and quadrat counts. For public and public summary data
+  this gives exactly the same surveys as checking the values.
 - **Repeats** are distinct calendar years with data.
 - **Pairing:** when more than one protocol is selected, surveys are paired if every
   selected protocol was surveyed at the site within ±30 days of any one of those surveys.
@@ -59,17 +62,20 @@ not run. Render the document to see the map.
 document. It lives inside `docs/` because GitHub Pages only publishes from the repository
 root or `docs/`, and it is plain HTML, CSS and JavaScript, so there is nothing to build.
 
-- **Controls:** protocol check boxes, a pairing-window slider (±0 to 120 days), a
-  minimum-years slider, and searchable country and project filters. The project list
-  narrows to the countries chosen.
+- **Controls:** protocol check boxes, an **Include private data** toggle (off by
+  default), a pairing-window slider (±0 to 120 days), a minimum-years slider, and
+  searchable country and project filters. The project list narrows to the countries
+  chosen, and lists private-only projects only when private data are included.
 - **Pairing** is done in the browser (`docs/app/app.js`, function `pairedYears()`) using
   the same rule as the Quarto document. At ±30 days its counts match the Quarto
-  document's summary table for all 15 protocol combinations.
+  document's two summary tables (public only, and including private) for all 15
+  protocol combinations.
 - **Map:** Leaflet with Esri basemaps (light, ocean, satellite - no API key needed), sites
   coloured by number of years, and optional grouping of nearby sites, where each group
   takes the colour of its longest time series.
-- **Site panel:** site, project, country, data policy and survey years per selected
-  protocol, and a link to the project in MERMAID Explore.
+- **Site panel:** site, project, country, data policy (public, public summary or
+  private) and survey years per selected protocol, a note when any of them is private,
+  and a link to the project in MERMAID Explore.
 - **Download:** the sites currently shown, as a CSV.
 
 ### Updating the app's data

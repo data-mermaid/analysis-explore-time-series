@@ -361,6 +361,16 @@ button.primary:disabled { opacity: 0.5; cursor: default; }
 .protocol-row .label { font-weight: 600; }
 .protocol-row .policy { color: var(--muted); }
 .protocol-row .years { color: var(--ink); line-height: 1.4; }
+.private-note {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+  background: #f3f5f8;
+  border-radius: 6px;
+}
+.private-toggle { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid var(--line); }
 .explore-link {
   display: inline-block;
   margin-top: 12px;

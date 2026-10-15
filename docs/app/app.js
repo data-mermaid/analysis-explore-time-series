@@ -28,12 +28,14 @@ const YEAR_BANDS = [
   { label: "10+ years", min: 10, colour: "#440154", text: "#ffffff" }
 ];
 
+// Data policy codes written by R/export_app_data.R
 const POLICY_LABELS = {
-  0: "No public data",
+  0: "Not surveyed",
   1: "Public summary",
   2: "Public",
-  3: "Public and public summary"
+  3: "Private"
 };
+const PRIVATE = 3;
 
 // Filters and options chosen in the sidebar
 const state = {
@@ -42,7 +44,8 @@ const state = {
   minYears: 2,
   countries: new Set(),
   projects: new Set(),
-  group: true
+  group: true,
+  includePrivate: false   // private surveys: locations and dates only, no values
 };
 
 let DATA = null;      // processed data (see processData)
@@ -99,9 +102,9 @@ function perFrame(fn) {
 function processData(raw) {
   const protocols = raw.meta.protocols;              // [{key, label}]
   const nProt = protocols.length;
-  const countries = raw.countries.map(name => ({ name, sites: 0 }));
+  const countries = raw.countries.map(name => ({ name, sites: 0, hasPublic: false }));
   const projects = raw.projects.id.map((id, i) => ({
-    id, name: raw.projects.name[i], countries: new Set(), sites: 0
+    id, name: raw.projects.name[i], countries: new Set(), sites: 0, hasPublic: false
   }));
 
   const s = raw.sites;
@@ -127,6 +130,11 @@ function processData(raw) {
     site.project.countries.add(site.country.name);
     site.project.sites++;
     site.country.sites++;
+    // Does this site have any public or public summary protocol?
+    if (site.policy.some(c => c === 1 || c === 2)) {
+      site.project.hasPublic = true;
+      site.country.hasPublic = true;
+    }
   }
 
   const sv = raw.surveys;
@@ -164,9 +172,24 @@ function selectedProtocolIdx() {
     .filter(i => i >= 0);
 }
 
+// Countries and projects to offer in the filters: those with public data,
+// plus private-only ones when private data are included
+function allowedCountries() {
+  return DATA.countries.filter(c => state.includePrivate || c.hasPublic);
+}
+
 function allowedProjects() {
-  if (state.countries.size === 0) return DATA.projects;
-  return DATA.projects.filter(p => [...p.countries].some(c => state.countries.has(c)));
+  return DATA.projects.filter(p =>
+    (state.includePrivate || p.hasPublic) &&
+    (state.countries.size === 0 || [...p.countries].some(c => state.countries.has(c))));
+}
+
+// Drop selected countries and projects that are no longer offered
+function pruneFilters() {
+  const countries = new Set(allowedCountries().map(c => c.name));
+  for (const c of [...state.countries]) if (!countries.has(c)) state.countries.delete(c);
+  const projects = new Set(allowedProjects().map(p => p.id));
+  for (const id of [...state.projects]) if (!projects.has(id)) state.projects.delete(id);
 }
 
 // Recalculate RESULTS from the current filters
@@ -177,6 +200,8 @@ function compute() {
     for (const site of DATA.sites) {
       if (state.countries.size && !state.countries.has(site.country.name)) continue;
       if (state.projects.size && !state.projects.has(site.project.id)) continue;
+      // Without private data, skip sites where a selected protocol is private
+      if (!state.includePrivate && protIdx.some(p => site.policy[p] === PRIVATE)) continue;
       const years = pairedYears(site, protIdx, state.window);
       if (years) all.push({ site, years, n: years.length });
     }
@@ -325,6 +350,10 @@ function showSitePanel(r) {
       </div>`;
   }).join("");
 
+  const privateNote = selectedProtocolIdx().some(p => site.policy[p] === PRIVATE)
+    ? `<p class="private-note">Private data: MERMAID shares where and when these surveys happened, but not their results.</p>`
+    : "";
+
   const heading = state.protocols.size > 1
     ? `Years with paired surveys (${r.n})`
     : `Years with data (${r.n})`;
@@ -339,6 +368,7 @@ function showSitePanel(r) {
     <div class="chips">${r.years.map(y => `<span class="chip">${y}</span>`).join("")}</div>
     <h4>Selected protocols</h4>
     ${protocolRows}
+    ${privateNote}
     <a class="explore-link" href="${exploreLink(site)}" target="_blank" rel="noopener">View project in MERMAID Explore ↗</a>`;
   panel.hidden = false;
   panel.querySelector(".close").addEventListener("click", hideSitePanel);
@@ -352,17 +382,30 @@ function hideSitePanel() { $("site-panel").hidden = true; }
 function buildProtocolList() {
   const list = $("protocol-list");
   list.innerHTML = DATA.protocols.map((p, i) => {
-    const nSites = DATA.sites.filter(s => s.dates[i].length > 0).length;
     return `<label>
         <span class="name"><input type="checkbox" value="${p.key}" ${state.protocols.has(p.key) ? "checked" : ""}>
         ${esc(p.label)}</span>
-        <span class="count" title="Sites with any public data for this protocol">${fmt(nSites)}</span>
+        <span class="count" id="protocol-count-${i}"></span>
       </label>`;
   }).join("");
+  renderProtocolCounts();
   list.addEventListener("change", e => {
     if (e.target.checked) state.protocols.add(e.target.value);
     else state.protocols.delete(e.target.value);
     update();
+  });
+}
+
+// Number of sites with any data for each protocol, given the private setting
+function renderProtocolCounts() {
+  DATA.protocols.forEach((p, i) => {
+    const n = DATA.sites.filter(s =>
+      s.dates[i].length > 0 && (state.includePrivate || s.policy[i] !== PRIVATE)).length;
+    const el = $(`protocol-count-${i}`);
+    el.textContent = fmt(n);
+    el.title = state.includePrivate
+      ? "Sites with any data for this protocol, including private"
+      : "Sites with any public or public summary data for this protocol";
   });
 }
 
@@ -403,7 +446,7 @@ function buildFilters() {
   renderCountries = setupFilter({
     key: "country",
     selected: state.countries,
-    getItems: () => DATA.countries.map(c => ({ value: c.name, label: c.name })),
+    getItems: () => allowedCountries().map(c => ({ value: c.name, label: c.name })),
     onChange: () => {
       // Drop selected projects that are outside the chosen countries
       const allowed = new Set(allowedProjects().map(p => p.id));
@@ -440,6 +483,14 @@ function buildControls() {
   });
 
   $("group-sites").addEventListener("change", e => { state.group = e.target.checked; drawSites(); });
+  $("include-private").addEventListener("change", e => {
+    state.includePrivate = e.target.checked;
+    pruneFilters();
+    renderCountries();
+    renderProjects();
+    renderProtocolCounts();
+    update();
+  });
   $("download").addEventListener("click", downloadCsv);
 
   const d = DATA.meta.downloaded;
@@ -468,7 +519,8 @@ function updateSummary() {
       ? `with ${labels[0]} data`
       : `with ${labels.join(", ")} surveyed within ±${state.window} days of each other`;
     detail = `${plural(projects, "project")} · ${plural(countries, "country", "countries")}<br>` +
-      `Sites ${esc(what)} in at least ${plural(state.minYears, "year")}.`;
+      `Sites ${esc(what)} in at least ${plural(state.minYears, "year")}` +
+      (state.includePrivate ? ", including private data." : ".");
   }
   $("summary-detail").innerHTML = detail;
 
